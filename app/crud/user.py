@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password
-from app.models.user import User
+from app.models.user import Role, User
 from app.schemas.user import UserCreate, UserUpdate
 
 
@@ -61,12 +61,42 @@ async def update(db: "AsyncSession", user: "User", user_in: "UserUpdate") -> "Us
     """
 
     data = user_in.model_dump(exclude_unset=True)
-    if "password" in data:
-        data["hashed_password"] = hash_password(data.pop("password"))
     for field, value in data.items():
         setattr(user, field, value)
     await db.commit()
     await db.refresh(user)
     return user
-    ...
+
+
+async def get_multi(db: AsyncSession, *, skip: int = 0, limit: int = 20) -> list[User]:
+    """Return a page of users. Ordered by created_at so pagination is stable —
+    without an ORDER BY, offset/limit can repeat or skip rows between requests.
+    """
+    stmt = select(User).order_by(User.created_at).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def set_role(db: AsyncSession, user: User, role: Role) -> User:
+    """Set a user's role (admin action). `user` must already be loaded."""
+    user.role = role
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def set_password(db: AsyncSession, user: User, hashed_password: str) -> None:
+    """Store an already-hashed password. Hashing stays in the caller so this
+    layer never sees plaintext."""
+    user.hashed_password = hashed_password
+    await db.commit()
+
+
+async def deactivate(db: AsyncSession, user: User) -> User:
+    """Soft-delete: flip is_active to False. The row stays for audit/history;
+    queries that should hide inactive users filter on is_active themselves."""
+    user.is_active = False
+    await db.commit()
+    await db.refresh(user)
+    return user
 

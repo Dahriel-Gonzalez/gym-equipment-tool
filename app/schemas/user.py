@@ -44,6 +44,16 @@ class PasswordChange(BaseModel):
     new_password: str = Field(..., min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
 
 
+class RoleUpdate(BaseModel):
+    """Body for PATCH /users/{id}/role — admin sets a user's role.
+
+    A dedicated single-field schema (not part of UserUpdate) keeps role changes
+    on their own admin-only path; a normal profile update can't touch role.
+    """
+
+    role: Role
+
+
 class UserSummary(BaseModel):
     """Slim nested form (id + name) for embedding in other responses
     """
