@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import Boolean, Date, Enum as SAEnum, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UUIDPrimaryKeyMixin, TimestampMixin
+from app.db.base import Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin
 
 if TYPE_CHECKING:
     from app.models.issue import Issue
@@ -26,7 +26,7 @@ class EquipmentStatus(enum.Enum):
     under_maintenance = "under_maintenance"
     decommissioned = "decommissioned"
 
-class Equipment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class Equipment(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     """Equipment model."""
 
     __tablename__ = "equipment"

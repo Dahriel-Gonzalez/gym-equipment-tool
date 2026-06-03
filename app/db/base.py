@@ -50,3 +50,17 @@ class TimestampMixin:
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class SoftDeleteMixin:
+    """Adds a nullable `deleted_at` marker for soft deletes.
+
+    Rows are never physically removed; `delete` stamps deleted_at, and reads
+    filter on `deleted_at IS NULL`. Apply only to models that need it.
+    """
+
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+    )
