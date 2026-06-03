@@ -13,11 +13,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crud import equipment as equipment_crud
+from app.crud import issue as issue_crud
 from app.db.session import get_db
 from app.dependencies import get_current_user, require_role
 from app.models.equipment import Equipment, EquipmentStatus
+from app.models.issue import Issue
 from app.models.user import Role, User
 from app.schemas.equipment import EquipmentCreate, EquipmentResponse, EquipmentUpdate
+from app.schemas.issue import IssueResponse
 
 router = APIRouter()
 
@@ -104,16 +107,21 @@ async def delete_equipment(
     return None
 
 
-# DEFERRED: GET /{equipment_id}/issues — list issues for a piece of equipment.
-# Needs the Issue layer (issue crud + IssueResponse schema), which is a later
-# feature. Wire it when those exist:
-#
-# @router.get("/{equipment_id}/issues", response_model=list[IssueResponse])
-# async def list_equipment_issues(
-#     equipment_id: UUID,
-#     db: AsyncSession = Depends(get_db),
-#     _user: User = Depends(get_current_user),
-# ) -> list[Issue]:
-#     if await equipment_crud.get(db, equipment_id) is None:
-#         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="EQUIPMENT_NOT_FOUND")
-#     return await issue_crud.get_multi(db, equipment_id=equipment_id)
+@router.get("/{equipment_id}/issues", response_model=list[IssueResponse])
+async def list_equipment_issues(
+    equipment_id: UUID,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> list[Issue]:
+    """List issues logged against one piece of equipment.
+
+    NOTE: spec marks this 'Any' authenticated user, but GET /issues/ is staff+.
+    So a member can see ALL issues for an asset here while being blocked from the
+    general list — a visibility inconsistency. Following the spec as written;
+    tighten to require_role(staff+) if that leak matters.
+    """
+    if await equipment_crud.get(db, equipment_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="EQUIPMENT_NOT_FOUND")
+    return await issue_crud.get_multi(db, skip=skip, limit=limit, equipment_id=equipment_id)
