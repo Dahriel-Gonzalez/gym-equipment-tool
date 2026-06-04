@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -25,8 +25,19 @@ _LOAD_RELATIONS = (
 
 
 async def get(db: AsyncSession, issue_id: UUID) -> Issue | None:
-    """Fetch one issue (with relations loaded), or None."""
-    stmt = select(Issue).where(Issue.id == issue_id).options(*_LOAD_RELATIONS)
+    """Fetch one issue (with relations loaded), or None.
+
+    populate_existing=True forces already-identity-mapped objects to refresh their
+    relationships from this query. Without it, re-fetching an issue whose FK we
+    just changed (assign/transition) would return the stale, previously-loaded
+    relationship (e.g. assigned_to=None) instead of the new value.
+    """
+    stmt = (
+        select(Issue)
+        .where(Issue.id == issue_id)
+        .options(*_LOAD_RELATIONS)
+        .execution_options(populate_existing=True)
+    )
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
@@ -43,36 +54,36 @@ async def get_multi(
     reported_by_id: UUID | None = None,
     created_after: datetime | None = None,
     created_before: datetime | None = None,
-) -> list[Issue]:
-    """List issues, applying only the filters provided. Newest first.
+) -> tuple[list[Issue], int]:
+    """List issues + total count, applying only the filters provided. Newest first.
 
     `reported_by_id` doubles as the "my issues" filter — GET /issues/mine just
     calls this with reported_by_id=current_user.id, no separate query needed.
     """
-    stmt = select(Issue)
+    base = select(Issue)
     if status is not None:
-        stmt = stmt.where(Issue.status == status)
+        base = base.where(Issue.status == status)
     if severity is not None:
-        stmt = stmt.where(Issue.severity == severity)
+        base = base.where(Issue.severity == severity)
     if equipment_id is not None:
-        stmt = stmt.where(Issue.equipment_id == equipment_id)
+        base = base.where(Issue.equipment_id == equipment_id)
     if assigned_to_id is not None:
-        stmt = stmt.where(Issue.assigned_to_id == assigned_to_id)
+        base = base.where(Issue.assigned_to_id == assigned_to_id)
     if reported_by_id is not None:
-        stmt = stmt.where(Issue.reported_by_id == reported_by_id)
+        base = base.where(Issue.reported_by_id == reported_by_id)
     if created_after is not None:
-        stmt = stmt.where(Issue.created_at >= created_after)
+        base = base.where(Issue.created_at >= created_after)
     if created_before is not None:
-        stmt = stmt.where(Issue.created_at <= created_before)
+        base = base.where(Issue.created_at <= created_before)
 
-    stmt = (
-        stmt.options(*_LOAD_RELATIONS)
-        .order_by(Issue.created_at.desc(), Issue.id)  # id tiebreaker = stable paging
+    total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    rows = await db.execute(
+        base.options(*_LOAD_RELATIONS)
+        .order_by(Issue.created_at.desc(), Issue.id)
         .offset(skip)
         .limit(limit)
     )
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
+    return list(rows.scalars().all()), total
 
 
 async def create(db: AsyncSession, issue_in: IssueCreate, reported_by_id: UUID) -> Issue:

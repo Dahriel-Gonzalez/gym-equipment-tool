@@ -60,7 +60,7 @@ class IssueService:
 
         if key not in TRANSITIONS:
             raise HTTPException(
-                http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="INVALID_TRANSITION"
+                http_status.HTTP_422_UNPROCESSABLE_CONTENT, detail="INVALID_TRANSITION"
             )
         
         if actor.role not in TRANSITIONS[key]:

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password, verify_password
@@ -20,6 +20,7 @@ from app.crud import user as user_crud
 from app.db.session import get_db
 from app.dependencies import get_current_user, require_role
 from app.models.user import Role, User
+from app.schemas.pagination import PaginatedResponse, PaginationParams
 from app.schemas.user import PasswordChange, RoleUpdate, UserResponse, UserUpdate
 
 router = APIRouter()
@@ -60,15 +61,19 @@ async def change_my_password(
 
 # --- Management (manager+ / admin) ---
 
-@router.get("/", response_model=list[UserResponse])
+@router.get("/", response_model=PaginatedResponse[UserResponse])
 async def list_users(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    pagination: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_role(Role.admin)),
-) -> list[User]:
+) -> PaginatedResponse[UserResponse]:
     """List all users (admin only). Offset/limit paginated."""
-    return await user_crud.get_multi(db, skip=skip, limit=limit)
+    users, total = await user_crud.get_multi(
+        db, skip=pagination.skip, limit=pagination.limit
+    )
+    return PaginatedResponse.create(
+        users, total, skip=pagination.skip, limit=pagination.limit
+    )
 
 
 @router.get("/{user_id}", response_model=UserResponse)

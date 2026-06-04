@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,29 +35,31 @@ async def get_multi(
     category: str | None = None,
     location: str | None = None,
     search: str | None = None,
-) -> list[Equipment]:
-    """List equipment, applying only the filters that were provided.
+) -> tuple[list[Equipment], int]:
+    """List equipment + total count, applying only the filters provided.
 
-    Each filter is an optional AND clause: start from a base SELECT and tack on a
-    .where() per non-None argument. Unset filters simply don't narrow the query.
-    `search` is a case-insensitive partial match on name.
+    Build the filtered base once; COUNT over it for `total`, then add ordering +
+    paging for the page. Each filter is an optional AND clause; unset filters
+    simply don't narrow the query. `search` is a case-insensitive match on name.
     """
     # Soft-deleted rows are excluded from every list.
-    stmt = select(Equipment).where(Equipment.deleted_at.is_(None))
+    base = select(Equipment).where(Equipment.deleted_at.is_(None))
     if status is not None:
-        stmt = stmt.where(Equipment.status == status)
+        base = base.where(Equipment.status == status)
     if category is not None:
-        stmt = stmt.where(Equipment.category == category)
+        base = base.where(Equipment.category == category)
     if location is not None:
-        stmt = stmt.where(Equipment.location == location)
+        base = base.where(Equipment.location == location)
     if search:
         # ILIKE = case-insensitive LIKE; %term% = contains. The value is bound as
         # a parameter (not string-formatted into SQL), so this isn't injectable.
-        stmt = stmt.where(Equipment.name.ilike(f"%{search}%"))
+        base = base.where(Equipment.name.ilike(f"%{search}%"))
 
-    stmt = stmt.order_by(Equipment.created_at).offset(skip).limit(limit)
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
+    total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    rows = await db.execute(
+        base.order_by(Equipment.created_at, Equipment.id).offset(skip).limit(limit)
+    )
+    return list(rows.scalars().all()), total
 
 
 async def create(db: AsyncSession, equipment_in: EquipmentCreate) -> Equipment:

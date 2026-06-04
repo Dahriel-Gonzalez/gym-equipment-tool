@@ -21,11 +21,12 @@ from app.models.issue import Issue
 from app.models.user import Role, User
 from app.schemas.equipment import EquipmentCreate, EquipmentResponse, EquipmentUpdate
 from app.schemas.issue import IssueResponse
+from app.schemas.pagination import PaginatedResponse, PaginationParams
 
 router = APIRouter()
 
 
-@router.get("/", response_model=list[EquipmentResponse])
+@router.get("/", response_model=PaginatedResponse[EquipmentResponse])
 async def list_equipment(
     # alias="status" keeps the query key `?status=` while avoiding shadowing the
     # imported fastapi `status` module inside this function.
@@ -33,20 +34,22 @@ async def list_equipment(
     category: str | None = Query(None),
     location: str | None = Query(None),
     search: str | None = Query(None),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    pagination: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
-) -> list[Equipment]:
+) -> PaginatedResponse[EquipmentResponse]:
     """List equipment with optional filters (status/category/location/search)."""
-    return await equipment_crud.get_multi(
+    items, total = await equipment_crud.get_multi(
         db,
-        skip=skip,
-        limit=limit,
+        skip=pagination.skip,
+        limit=pagination.limit,
         status=status_filter,
         category=category,
         location=location,
         search=search,
+    )
+    return PaginatedResponse.create(
+        items, total, skip=pagination.skip, limit=pagination.limit
     )
 
 
@@ -107,14 +110,13 @@ async def delete_equipment(
     return None
 
 
-@router.get("/{equipment_id}/issues", response_model=list[IssueResponse])
+@router.get("/{equipment_id}/issues", response_model=PaginatedResponse[IssueResponse])
 async def list_equipment_issues(
     equipment_id: UUID,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    pagination: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
-) -> list[Issue]:
+) -> PaginatedResponse[IssueResponse]:
     """List issues logged against one piece of equipment.
 
     NOTE: spec marks this 'Any' authenticated user, but GET /issues/ is staff+.
@@ -124,4 +126,9 @@ async def list_equipment_issues(
     """
     if await equipment_crud.get(db, equipment_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="EQUIPMENT_NOT_FOUND")
-    return await issue_crud.get_multi(db, skip=skip, limit=limit, equipment_id=equipment_id)
+    items, total = await issue_crud.get_multi(
+        db, skip=pagination.skip, limit=pagination.limit, equipment_id=equipment_id
+    )
+    return PaginatedResponse.create(
+        items, total, skip=pagination.skip, limit=pagination.limit
+    )

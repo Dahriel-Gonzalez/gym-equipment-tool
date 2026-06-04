@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import (
@@ -27,6 +27,7 @@ from app.models.comment import Comment
 from app.models.issue import Issue
 from app.models.user import User
 from app.schemas.comment import CommentCreate, CommentResponse, CommentUpdate
+from app.schemas.pagination import PaginatedResponse, PaginationParams
 
 router = APIRouter()
 
@@ -46,23 +47,25 @@ async def _get_comment_or_404(db: AsyncSession, issue_id: UUID, comment_id: UUID
     return comment
 
 
-@router.get("/{issue_id}/comments/", response_model=list[CommentResponse])
+@router.get("/{issue_id}/comments/", response_model=PaginatedResponse[CommentResponse])
 async def list_comments(
     issue_id: UUID,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
+    pagination: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> list[Comment]:
+) -> PaginatedResponse[CommentResponse]:
     """List an issue's comments. Members get public comments only."""
     issue = await _get_issue_or_404(db, issue_id)
     ensure_can_access_issue(current_user, issue)
-    return await comment_crud.get_multi_for_issue(
+    items, total = await comment_crud.get_multi_for_issue(
         db,
         issue_id,
         include_internal=is_staff_or_above(current_user),
-        skip=skip,
-        limit=limit,
+        skip=pagination.skip,
+        limit=pagination.limit,
+    )
+    return PaginatedResponse.create(
+        items, total, skip=pagination.skip, limit=pagination.limit
     )
 
 

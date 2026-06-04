@@ -32,12 +32,13 @@ from app.schemas.issue import (
     IssueStatusUpdate,
     IssueUpdate,
 )
+from app.schemas.pagination import PaginatedResponse, PaginationParams
 from app.services.issue_service import IssueService
 
 router = APIRouter()
 
 
-@router.get("/", response_model=list[IssueResponse])
+@router.get("/", response_model=PaginatedResponse[IssueResponse])
 async def list_issues(
     status_filter: IssueStatus | None = Query(None, alias="status"),
     severity: IssueSeverity | None = Query(None),
@@ -46,16 +47,15 @@ async def list_issues(
     reported_by: UUID | None = Query(None),
     created_after: datetime | None = Query(None),
     created_before: datetime | None = Query(None),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    pagination: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
     _staff: User = Depends(require_role(Role.staff, Role.manager, Role.admin)),
-) -> list[Issue]:
+) -> PaginatedResponse[IssueResponse]:
     """List all issues with optional filters (staff+ only)."""
-    return await issue_crud.get_multi(
+    items, total = await issue_crud.get_multi(
         db,
-        skip=skip,
-        limit=limit,
+        skip=pagination.skip,
+        limit=pagination.limit,
         status=status_filter,
         severity=severity,
         equipment_id=equipment_id,
@@ -63,6 +63,9 @@ async def list_issues(
         reported_by_id=reported_by,
         created_after=created_after,
         created_before=created_before,
+    )
+    return PaginatedResponse.create(
+        items, total, skip=pagination.skip, limit=pagination.limit
     )
 
 
@@ -88,16 +91,18 @@ async def create_issue(
     return issue
 
 
-@router.get("/mine", response_model=list[IssueResponse])
+@router.get("/mine", response_model=PaginatedResponse[IssueResponse])
 async def list_my_issues(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    pagination: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> list[Issue]:
+) -> PaginatedResponse[IssueResponse]:
     """List the caller's own reported issues."""
-    return await issue_crud.get_multi(
-        db, skip=skip, limit=limit, reported_by_id=current_user.id
+    items, total = await issue_crud.get_multi(
+        db, skip=pagination.skip, limit=pagination.limit, reported_by_id=current_user.id
+    )
+    return PaginatedResponse.create(
+        items, total, skip=pagination.skip, limit=pagination.limit
     )
 
 

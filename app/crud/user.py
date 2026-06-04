@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,13 +68,21 @@ async def update(db: "AsyncSession", user: "User", user_in: "UserUpdate") -> "Us
     return user
 
 
-async def get_multi(db: AsyncSession, *, skip: int = 0, limit: int = 20) -> list[User]:
-    """Return a page of users. Ordered by created_at so pagination is stable —
-    without an ORDER BY, offset/limit can repeat or skip rows between requests.
+async def get_multi(
+    db: AsyncSession, *, skip: int = 0, limit: int = 20
+) -> tuple[list[User], int]:
+    """Return a page of users AND the total count of all users.
+
+    `total` runs a COUNT over the same base query (no offset/limit) so the
+    response envelope can report has_next. Ordered by created_at + id for
+    stable paging.
     """
-    stmt = select(User).order_by(User.created_at).offset(skip).limit(limit)
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
+    base = select(User)
+    total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    rows = await db.execute(
+        base.order_by(User.created_at, User.id).offset(skip).limit(limit)
+    )
+    return list(rows.scalars().all()), total
 
 
 async def set_role(db: AsyncSession, user: User, role: Role) -> User:

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -38,21 +38,21 @@ async def get_multi_for_issue(
     include_internal: bool,
     skip: int = 0,
     limit: int = 50,
-) -> list[Comment]:
-    """List an issue's comments oldest-first. When include_internal is False,
-    is_internal comments are excluded at the SQL level.
+) -> tuple[list[Comment], int]:
+    """List an issue's comments (oldest-first) + total count. When
+    include_internal is False, is_internal comments are excluded at the SQL level.
     """
-    stmt = select(Comment).where(Comment.issue_id == issue_id)
+    base = select(Comment).where(Comment.issue_id == issue_id)
     if not include_internal:
-        stmt = stmt.where(Comment.is_internal.is_(False))
-    stmt = (
-        stmt.options(*_LOAD_RELATIONS)
+        base = base.where(Comment.is_internal.is_(False))
+    total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    rows = await db.execute(
+        base.options(*_LOAD_RELATIONS)
         .order_by(Comment.created_at, Comment.id)  # chronological, stable tiebreaker
         .offset(skip)
         .limit(limit)
     )
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
+    return list(rows.scalars().all()), total
 
 
 async def create(
