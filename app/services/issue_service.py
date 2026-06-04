@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crud import equipment as equipment_crud
 from app.crud import issue as issue_crud
+from app.models.comment import Comment
 from app.models.equipment import EquipmentStatus
 from app.models.issue import Issue, IssueSeverity, IssueStatus
 from app.models.user import Role, User
@@ -78,8 +79,18 @@ class IssueService:
 
         await self.sync_equipment_status(issue.equipment_id)
 
-        # TODO(comments layer): if `note` is provided, record it as a Comment on
-        # the issue. Skipped until comment CRUD exists.
+        # If a note was supplied, record it as an internal comment in the SAME
+        # unit of work — added to the session here, persisted by the commit below.
+        # Internal so it reads as a staff-facing audit note, not shown to members.
+        if note:
+            self.db.add(
+                Comment(
+                    issue_id=issue.id,
+                    author_id=actor.id,
+                    body=note,
+                    is_internal=True,
+                )
+            )
 
         await self.db.commit()
         return await issue_crud.get(self.db, issue.id)

@@ -16,6 +16,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.permissions import ensure_can_access_issue
 from app.crud import equipment as equipment_crud
 from app.crud import issue as issue_crud
 from app.crud import user as user_crud
@@ -34,14 +35,6 @@ from app.schemas.issue import (
 from app.services.issue_service import IssueService
 
 router = APIRouter()
-
-_STAFF_AND_UP = {Role.staff, Role.manager, Role.admin}
-
-
-def _ensure_can_access(user: User, issue: Issue) -> None:
-    """Row-level guard: staff+ see everything; a member only their own issue."""
-    if user.role not in _STAFF_AND_UP and issue.reported_by_id != user.id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="FORBIDDEN")
 
 
 @router.get("/", response_model=list[IssueResponse])
@@ -118,7 +111,7 @@ async def get_issue(
     issue = await issue_crud.get(db, issue_id)
     if issue is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="ISSUE_NOT_FOUND")
-    _ensure_can_access(current_user, issue)
+    ensure_can_access_issue(current_user, issue)
     return issue
 
 
@@ -133,7 +126,7 @@ async def update_issue(
     issue = await issue_crud.get(db, issue_id)
     if issue is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="ISSUE_NOT_FOUND")
-    _ensure_can_access(current_user, issue)
+    ensure_can_access_issue(current_user, issue)
     return await issue_crud.update(db, issue, payload)
 
 
