@@ -34,11 +34,33 @@ from sqlalchemy.pool import NullPool
 
 import app.models  # noqa: F401  — register every table on Base.metadata
 from app.config import settings
+from app.core import cache
 from app.core.security import create_access_token, hash_password
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models.user import Role, User
+
+
+@pytest.fixture(autouse=True)
+def _disable_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Turn the Redis cache into a no-op for every test (autouse).
+
+    Redis is a separate process that outlives a single test, while each test
+    rebuilds an empty database. With caching live, a page cached by one test
+    (60s TTL) could be served to a later test whose DB is freshly empty — an
+    intermittent stale hit. Replacing the helpers makes every read a miss and
+    every write/invalidation a no-op, so tests always hit the live DB path and
+    the suite needs no running Redis. (For tests that actually assert caching
+    behavior, swap in fakeredis instead of this fixture.)
+    """
+
+    async def _miss(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(cache, "get_json", _miss)
+    monkeypatch.setattr(cache, "set_json", _miss)
+    monkeypatch.setattr(cache, "delete_prefix", _miss)
 
 
 def _test_db_url() -> str:

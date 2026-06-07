@@ -7,11 +7,13 @@ Access tiers (per spec):
 """
 from __future__ import annotations
 
+import json
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import cache
 from app.crud import equipment as equipment_crud
 from app.crud import issue as issue_crud
 from app.db.session import get_db
@@ -24,6 +26,39 @@ from app.schemas.issue import IssueResponse
 from app.schemas.pagination import PaginatedResponse, PaginationParams
 
 router = APIRouter()
+
+# All cached equipment-list pages live under this key prefix, so any write can
+# invalidate the whole family with cache.delete_prefix(_LIST_CACHE_PREFIX).
+_LIST_CACHE_PREFIX = "equipment:list:"
+# Short TTL: the invalidation-on-write below keeps the cache correct; this is just
+# the backstop that bounds staleness if an invalidation is ever missed.
+_LIST_CACHE_TTL_SECONDS = 60
+
+
+def _list_cache_key(
+    *,
+    skip: int,
+    limit: int,
+    status: EquipmentStatus | None,
+    category: str | None,
+    location: str | None,
+    search: str | None,
+) -> str:
+    """Build a deterministic cache key from the exact filter + pagination inputs.
+
+    Two requests cache-hit each other only if every parameter matches, so each
+    distinct page/filter combination gets its own entry. sort_keys makes the
+    serialization canonical (key order can't produce two keys for one query).
+    """
+    params = {
+        "skip": skip,
+        "limit": limit,
+        "status": status.value if status is not None else None,
+        "category": category,
+        "location": location,
+        "search": search,
+    }
+    return _LIST_CACHE_PREFIX + json.dumps(params, sort_keys=True, separators=(",", ":"))
 
 
 @router.get("/", response_model=PaginatedResponse[EquipmentResponse])
@@ -38,7 +73,26 @@ async def list_equipment(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> PaginatedResponse[EquipmentResponse]:
-    """List equipment with optional filters (status/category/location/search)."""
+    """List equipment with optional filters (status/category/location/search).
+
+    Cache-aside: check Redis first; on a miss, query Postgres and store the
+    serialized page. Safe to cache because this list is identical for every
+    authenticated user (no per-user fields), so one entry serves everyone.
+    """
+    cache_key = _list_cache_key(
+        skip=pagination.skip,
+        limit=pagination.limit,
+        status=status_filter,
+        category=category,
+        location=location,
+        search=search,
+    )
+    cached = await cache.get_json(cache_key)
+    if cached is not None:
+        # Re-validate the stored dict back into the model: keeps the return type
+        # honest and rejects a stale entry whose shape predates a schema change.
+        return PaginatedResponse[EquipmentResponse].model_validate(cached)
+
     items, total = await equipment_crud.get_multi(
         db,
         skip=pagination.skip,
@@ -48,9 +102,15 @@ async def list_equipment(
         location=location,
         search=search,
     )
-    return PaginatedResponse.create(
+    response = PaginatedResponse[EquipmentResponse].create(
         items, total, skip=pagination.skip, limit=pagination.limit
     )
+    # mode="json" yields JSON-safe primitives (UUID/datetime -> str) so the value
+    # round-trips cleanly through json.dumps in the cache layer.
+    await cache.set_json(
+        cache_key, response.model_dump(mode="json"), ttl_seconds=_LIST_CACHE_TTL_SECONDS
+    )
+    return response
 
 
 @router.post("/", response_model=EquipmentResponse, status_code=status.HTTP_201_CREATED)
@@ -61,9 +121,12 @@ async def create_equipment(
 ) -> Equipment:
     """Add a new equipment asset (manager+)."""
     try:
-        return await equipment_crud.create(db, payload)
+        equipment = await equipment_crud.create(db, payload)
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="SERIAL_NUMBER_EXISTS") from exc
+    # A new asset can appear in (or shift) any list page — drop all cached pages.
+    await cache.delete_prefix(_LIST_CACHE_PREFIX)
+    return equipment
 
 
 @router.get("/{equipment_id}", response_model=EquipmentResponse)
@@ -91,9 +154,12 @@ async def update_equipment(
     if equipment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="EQUIPMENT_NOT_FOUND")
     try:
-        return await equipment_crud.update(db, equipment, payload)
+        updated = await equipment_crud.update(db, equipment, payload)
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="SERIAL_NUMBER_EXISTS") from exc
+    # Edited fields (status/category/name…) change list contents and filtering.
+    await cache.delete_prefix(_LIST_CACHE_PREFIX)
+    return updated
 
 
 @router.delete("/{equipment_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -107,6 +173,8 @@ async def delete_equipment(
     if equipment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="EQUIPMENT_NOT_FOUND")
     await equipment_crud.delete(db, equipment)
+    # A soft-deleted asset must drop out of every cached page.
+    await cache.delete_prefix(_LIST_CACHE_PREFIX)
     return None
 
 

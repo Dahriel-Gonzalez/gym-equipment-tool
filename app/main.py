@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import time
+from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator
 from uuid import uuid4
 
 import structlog
@@ -14,6 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1.router import api_router
 from app.config import settings
+from app.core import cache
 from app.core.errors import HUMAN_MESSAGES, INTERNAL_ERROR, VALIDATION_ERROR
 from app.core.logging import configure_logging, logger
 from app.db.session import engine
@@ -21,9 +24,22 @@ from app.db.session import engine
 # Configure logging before anything emits a log line.
 configure_logging(debug=settings.DEBUG)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """App lifespan: code before `yield` runs at startup, after it at shutdown.
+
+    On shutdown we release the Redis connection pool so the process exits without
+    leaking connections. (Lifespan, not the deprecated @app.on_event hooks.)
+    """
+    yield
+    await cache.close()
+
+
 app = FastAPI(
     title=settings.APP_NAME,
     debug=settings.DEBUG,
+    lifespan=lifespan,
     # Versioned API; the interactive docs are at /docs and /redoc.
 )
 
