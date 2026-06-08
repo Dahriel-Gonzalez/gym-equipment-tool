@@ -241,3 +241,46 @@ async def test_delete_issue_admin_only(client, users, auth_header):
         f"{ISSUES_URL}{issue_id}", headers=auth_header(users[Role.admin])
     )
     assert gone.status_code == 404
+
+
+# --- CSV export ---
+
+EXPORT_URL = "/api/v1/issues/export"
+
+
+async def test_export_issues_csv_staff(client, users, auth_header):
+    eq = await _create_equipment(client, auth_header, users)
+    await _create_issue(client, auth_header, users, eq, severity="high")
+
+    resp = await client.get(EXPORT_URL, headers=auth_header(users[Role.staff]))
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert "attachment" in resp.headers["content-disposition"]
+
+    lines = [ln for ln in resp.text.splitlines() if ln.strip()]
+    assert lines[0].startswith("id,title,equipment,severity,status,")  # header
+    assert len(lines) == 2                                             # header + 1 issue
+    assert "Treadmill #1" in resp.text          # equipment flattened to its name
+    assert "member@test.com" in resp.text       # reporter flattened to email
+    assert ",high," in resp.text                # severity enum value
+
+
+async def test_export_issues_forbidden_for_member(client, users, auth_header):
+    """Export is review-oriented: members (the default signup tier) can't pull it."""
+    resp = await client.get(EXPORT_URL, headers=auth_header(users[Role.member]))
+    assert resp.status_code == 403
+
+
+async def test_export_issues_respects_filters(client, users, auth_header):
+    eq = await _create_equipment(client, auth_header, users)
+    await _create_issue(client, auth_header, users, eq, severity="low")
+    await _create_issue(client, auth_header, users, eq, severity="critical")
+
+    resp = await client.get(
+        f"{EXPORT_URL}?severity=critical", headers=auth_header(users[Role.manager])
+    )
+    assert resp.status_code == 200
+    lines = [ln for ln in resp.text.splitlines() if ln.strip()]
+    assert len(lines) == 2          # header + only the critical issue
+    assert ",critical," in resp.text
+    assert ",low," not in resp.text

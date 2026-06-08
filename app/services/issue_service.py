@@ -13,6 +13,7 @@ from fastapi import HTTPException, status as http_status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.logging import logger
 from app.crud import equipment as equipment_crud
 from app.crud import issue as issue_crud
 from app.models.comment import Comment
@@ -93,6 +94,14 @@ class IssueService:
             )
 
         await self.db.commit()
+        # Structured audit line for the transition (request_id comes from contextvars).
+        logger.info(
+            "issue_status_changed",
+            issue_id=str(issue.id),
+            from_status=key[0].value,
+            to_status=new_status.value,
+            actor_id=str(actor.id),
+        )
         return await issue_crud.get(self.db, issue.id)
 
     async def sync_equipment_status(self, equipment_id) -> None:
@@ -107,11 +116,22 @@ class IssueService:
         if equipment is None or equipment.status == EquipmentStatus.decommissioned:
             return
 
+        # Decide the target status, then only write + log if it actually changes —
+        # so a re-sync that confirms the current state stays silent.
+        target = equipment.status
         if await self._has_active_critical(equipment_id):
-            equipment.status = EquipmentStatus.under_maintenance
+            target = EquipmentStatus.under_maintenance
         elif equipment.status == EquipmentStatus.under_maintenance:
             # No active critical issues left — release it back to operational.
-            equipment.status = EquipmentStatus.operational
+            target = EquipmentStatus.operational
+
+        if target != equipment.status:
+            equipment.status = target
+            logger.info(
+                "equipment_maintenance_set",
+                equipment_id=str(equipment_id),
+                status=target.value,
+            )
 
     async def _has_active_critical(self, equipment_id) -> bool:
         """True if the equipment has a critical-severity issue still open or in

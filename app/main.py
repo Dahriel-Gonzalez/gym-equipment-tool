@@ -22,7 +22,8 @@ from app.core import cache
 from app.core.errors import HUMAN_MESSAGES, INTERNAL_ERROR, VALIDATION_ERROR
 from app.core.logging import configure_logging, logger
 from app.core.rate_limit import limiter, rate_limit_exceeded_handler
-from app.db.session import engine
+from app.db.seed import seed_first_admin
+from app.db.session import SessionLocal, engine
 
 # Configure logging before anything emits a log line.
 configure_logging(debug=settings.DEBUG)
@@ -32,9 +33,16 @@ configure_logging(debug=settings.DEBUG)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """App lifespan: code before `yield` runs at startup, after it at shutdown.
 
-    On shutdown we release the Redis connection pool so the process exits without
-    leaking connections. (Lifespan, not the deprecated @app.on_event hooks.)
+    Startup seeds the first admin (idempotent). It's best-effort — if the DB is
+    unreachable or unmigrated, we log and start anyway rather than crash; /health
+    will surface a down database. On shutdown we release the Redis pool.
+    (Lifespan, not the deprecated @app.on_event hooks.)
     """
+    try:
+        async with SessionLocal() as db:
+            await seed_first_admin(db)
+    except Exception:
+        logger.warning("admin_seed_skipped", exc_info=True)
     yield
     await cache.close()
 

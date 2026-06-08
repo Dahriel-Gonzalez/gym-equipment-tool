@@ -42,6 +42,39 @@ async def get(db: AsyncSession, issue_id: UUID) -> Issue | None:
     return result.scalar_one_or_none()
 
 
+def _apply_filters(
+    stmt,
+    *,
+    status: IssueStatus | None = None,
+    severity: IssueSeverity | None = None,
+    equipment_id: UUID | None = None,
+    assigned_to_id: UUID | None = None,
+    reported_by_id: UUID | None = None,
+    created_after: datetime | None = None,
+    created_before: datetime | None = None,
+):
+    """Add a WHERE clause for each filter that was actually provided.
+
+    Shared by get_multi (paginated list) and get_for_export (full CSV dump) so the
+    two can't drift in how they interpret the same filters.
+    """
+    if status is not None:
+        stmt = stmt.where(Issue.status == status)
+    if severity is not None:
+        stmt = stmt.where(Issue.severity == severity)
+    if equipment_id is not None:
+        stmt = stmt.where(Issue.equipment_id == equipment_id)
+    if assigned_to_id is not None:
+        stmt = stmt.where(Issue.assigned_to_id == assigned_to_id)
+    if reported_by_id is not None:
+        stmt = stmt.where(Issue.reported_by_id == reported_by_id)
+    if created_after is not None:
+        stmt = stmt.where(Issue.created_at >= created_after)
+    if created_before is not None:
+        stmt = stmt.where(Issue.created_at <= created_before)
+    return stmt
+
+
 async def get_multi(
     db: AsyncSession,
     *,
@@ -60,22 +93,16 @@ async def get_multi(
     `reported_by_id` doubles as the "my issues" filter — GET /issues/mine just
     calls this with reported_by_id=current_user.id, no separate query needed.
     """
-    base = select(Issue)
-    if status is not None:
-        base = base.where(Issue.status == status)
-    if severity is not None:
-        base = base.where(Issue.severity == severity)
-    if equipment_id is not None:
-        base = base.where(Issue.equipment_id == equipment_id)
-    if assigned_to_id is not None:
-        base = base.where(Issue.assigned_to_id == assigned_to_id)
-    if reported_by_id is not None:
-        base = base.where(Issue.reported_by_id == reported_by_id)
-    if created_after is not None:
-        base = base.where(Issue.created_at >= created_after)
-    if created_before is not None:
-        base = base.where(Issue.created_at <= created_before)
-
+    base = _apply_filters(
+        select(Issue),
+        status=status,
+        severity=severity,
+        equipment_id=equipment_id,
+        assigned_to_id=assigned_to_id,
+        reported_by_id=reported_by_id,
+        created_after=created_after,
+        created_before=created_before,
+    )
     total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
     rows = await db.execute(
         base.options(*_LOAD_RELATIONS)
@@ -84,6 +111,37 @@ async def get_multi(
         .limit(limit)
     )
     return list(rows.scalars().all()), total
+
+
+async def get_for_export(
+    db: AsyncSession,
+    *,
+    status: IssueStatus | None = None,
+    severity: IssueSeverity | None = None,
+    equipment_id: UUID | None = None,
+    created_after: datetime | None = None,
+    created_before: datetime | None = None,
+) -> list[Issue]:
+    """Every issue matching the filters (no pagination), relations eager-loaded,
+    oldest first — the chronological order you want when reviewing history.
+
+    Returns a list rather than a stream: selectinload issues a follow-up query per
+    relation, which doesn't compose with async row-streaming, and a single gym's
+    issue volume fits comfortably in memory. The CSV is then streamed row-by-row
+    from this list in the endpoint, so the response body isn't buffered whole.
+    """
+    stmt = _apply_filters(
+        select(Issue),
+        status=status,
+        severity=severity,
+        equipment_id=equipment_id,
+        created_after=created_after,
+        created_before=created_before,
+    )
+    rows = await db.execute(
+        stmt.options(*_LOAD_RELATIONS).order_by(Issue.created_at, Issue.id)
+    )
+    return list(rows.scalars().all())
 
 
 async def create(db: AsyncSession, issue_in: IssueCreate, reported_by_id: UUID) -> Issue:
