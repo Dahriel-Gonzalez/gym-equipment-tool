@@ -35,6 +35,7 @@ from sqlalchemy.pool import NullPool
 import app.models  # noqa: F401  — register every table on Base.metadata
 from app.config import settings
 from app.core import cache
+from app.core.rate_limit import limiter
 from app.core.security import create_access_token, hash_password
 from app.db.base import Base
 from app.db.session import get_db
@@ -61,6 +62,19 @@ def _disable_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cache, "get_json", _miss)
     monkeypatch.setattr(cache, "set_json", _miss)
     monkeypatch.setattr(cache, "delete_prefix", _miss)
+
+
+@pytest.fixture(autouse=True)
+def _disable_rate_limit() -> None:
+    """Turn off rate limiting for every test (autouse).
+
+    The suite calls /login and /register many times in quick succession from one
+    client — exactly what the limits are meant to block — so leaving the limiter
+    on would trip 429s that have nothing to do with what each test asserts. A
+    dedicated test (below/elsewhere) can flip limiter.enabled back on to assert
+    the throttle actually fires.
+    """
+    limiter.enabled = False
 
 
 def _test_db_url() -> str:

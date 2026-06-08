@@ -4,7 +4,7 @@ Endpoints raise HTTPException(status, detail=<CODE>) where <CODE> is a stable,
 machine-readable string (e.g. "ISSUE_NOT_FOUND"), NOT a sentence. The exception
 handler in main.py looks the code up here to fill the response's `message` field.
 
-Why codes, not sentences: clients branch on codes, and a code never changes once
+clients branch on codes, and a code never changes once
 shipped; the wording in HUMAN_MESSAGES can be reworded or localized freely.
 """
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 # --- Codes emitted by the handlers themselves ---
 VALIDATION_ERROR = "VALIDATION_ERROR"
 INTERNAL_ERROR = "INTERNAL_ERROR"
+RATE_LIMIT_EXCEEDED = "RATE_LIMIT_EXCEEDED"
 
 # --- Auth / tokens ---
 INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
@@ -48,6 +49,7 @@ CANNOT_CREATE_INTERNAL_COMMENT = "CANNOT_CREATE_INTERNAL_COMMENT"
 HUMAN_MESSAGES: dict[str, str] = {
     VALIDATION_ERROR: "The request failed validation.",
     INTERNAL_ERROR: "An internal error occurred.",
+    RATE_LIMIT_EXCEEDED: "Too many requests. Please slow down and try again shortly.",
     INVALID_CREDENTIALS: "Email or password is incorrect.",
     INVALID_TOKEN: "Your session is invalid or has expired. Please log in again.",
     INACTIVE_USER: "This account is deactivated.",

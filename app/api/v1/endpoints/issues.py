@@ -13,10 +13,11 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import ensure_can_access_issue
+from app.core.rate_limit import ISSUE_CREATE_LIMIT, limiter, user_key
 from app.crud import equipment as equipment_crud
 from app.crud import issue as issue_crud
 from app.crud import user as user_crud
@@ -70,12 +71,18 @@ async def list_issues(
 
 
 @router.post("/", response_model=IssueResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(ISSUE_CREATE_LIMIT, key_func=user_key)
 async def create_issue(
+    request: Request,
     payload: IssueCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Issue:
-    """Log a new issue against a piece of equipment (any authenticated user)."""
+    """Log a new issue against a piece of equipment (any authenticated user).
+
+    Per-user rate limited: stops a single signed-up account from spamming issues,
+    while the global per-IP backstop catches floods across accounts.
+    """
     equipment = await equipment_crud.get(db, payload.equipment_id)
     if equipment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="EQUIPMENT_NOT_FOUND")

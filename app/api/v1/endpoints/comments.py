@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import (
@@ -19,6 +19,7 @@ from app.core.permissions import (
     is_manager_or_above,
     is_staff_or_above,
 )
+from app.core.rate_limit import COMMENT_CREATE_LIMIT, limiter, user_key
 from app.crud import comment as comment_crud
 from app.crud import issue as issue_crud
 from app.db.session import get_db
@@ -74,13 +75,18 @@ async def list_comments(
     response_model=CommentResponse,
     status_code=status.HTTP_201_CREATED,
 )
+@limiter.limit(COMMENT_CREATE_LIMIT, key_func=user_key)
 async def add_comment(
+    request: Request,
     issue_id: UUID,
     payload: CommentCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Comment:
-    """Add a comment to an issue. Only staff+ may mark a comment internal."""
+    """Add a comment to an issue. Only staff+ may mark a comment internal.
+
+    Per-user rate limited (like issue creation) to blunt comment spam from any
+    single account."""
     issue = await _get_issue_or_404(db, issue_id)
     ensure_can_access_issue(current_user, issue)
     if payload.is_internal and not is_staff_or_above(current_user):

@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.rate_limit import LOGIN_LIMIT, REGISTER_LIMIT, REFRESH_LIMIT, limiter
 from app.core.security import (
     REFRESH_TOKEN_TYPE,
     create_access_token,
@@ -36,7 +37,10 @@ def _tokens_for(user_id: UUID) -> Token:
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)) -> UserResponse:
+@limiter.limit(REGISTER_LIMIT)
+async def register(
+    request: Request, payload: UserCreate, db: AsyncSession = Depends(get_db)
+) -> UserResponse:
     """Create a new member account. Returns the created user (no token)."""
     try:
         user = await user_crud.create(db, payload)
@@ -48,7 +52,9 @@ async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)) -> U
 
 
 @router.post("/login", response_model=Token)
+@limiter.limit(LOGIN_LIMIT)
 async def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ) -> Token:
@@ -65,7 +71,10 @@ async def login(
 
 
 @router.post("/refresh", response_model=Token)
-async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -> Token:
+@limiter.limit(REFRESH_LIMIT)
+async def refresh(
+    request: Request, payload: RefreshRequest, db: AsyncSession = Depends(get_db)
+) -> Token:
     """Exchange a valid refresh token for a new token pair."""
     try:
         claims = decode_token(payload.refresh_token, expected_type=REFRESH_TOKEN_TYPE)

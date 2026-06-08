@@ -11,6 +11,8 @@ from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -19,6 +21,7 @@ from app.config import settings
 from app.core import cache
 from app.core.errors import HUMAN_MESSAGES, INTERNAL_ERROR, VALIDATION_ERROR
 from app.core.logging import configure_logging, logger
+from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.db.session import engine
 
 # Configure logging before anything emits a log line.
@@ -42,6 +45,16 @@ app = FastAPI(
     lifespan=lifespan,
     # Versioned API; the interactive docs are at /docs and /redoc.
 )
+
+# Rate limiting: the @limiter.limit decorators on routes read the limiter back
+# off app.state, and a tripped limit raises RateLimitExceeded — handled below in
+# our error envelope. Registering the specific handler makes it win over the
+# generic StarletteHTTPException handler for this subclass.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+# Enforces the limiter's default_limits (the global per-IP backstop) on every
+# route; per-route @limiter.limit decorators add their own tighter limits on top.
+app.add_middleware(SlowAPIMiddleware)
 
 
 @app.middleware("http")

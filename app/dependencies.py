@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +30,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
 async def get_current_user(
+    request: Request,
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
@@ -38,6 +39,10 @@ async def get_current_user(
     One opaque error for every failure mode (missing claim, bad signature,
     expired, wrong token type, unknown or deactivated user) so we never leak
     which part failed.
+
+    Side effect: stashes the resolved user id on request.state so the per-user
+    rate limiter (user_key) can bucket by user. This runs during dependency
+    resolution, before the @limiter.limit check inside the route body.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -54,6 +59,7 @@ async def get_current_user(
     user = await user_crud.get(db, user_id)
     if user is None or not user.is_active:
         raise credentials_exception
+    request.state.current_user_id = user.id
     return user
 
 
