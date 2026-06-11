@@ -1,0 +1,59 @@
+# Render Blueprint — provisions the API and a Key Value (Redis) store. Postgres
+# is hosted on Neon (set DATABASE_URL below at apply time), not Render. Apply
+# from the Render dashboard:
+#   New > Blueprint  →  connect this repo  →  Apply.
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  # --- Redis / Key Value (equipment-list cache; the app fails open without it) ---
+  - name: gym-equipment-cache
+    type: keyvalue
+    plan: free
+    ipAllowList: []       # empty = reachable only from the Render private network
+
+  # --- FastAPI web service ---
+  - name: gym-equipment-api
+    type: web
+    runtime: python
+    plan: free
+    buildCommand: pip install .
+    # Run migrations (idempotent) before booting the server. Seeding the first
+    # admin happens in the app's startup lifespan.
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: APP_NAME
+        value: Gym Equipment API
+      - key: DEBUG
+        value: "false"
+
+      # Neon Postgres connection string (the direct/unpooled one ending in
+      # `?sslmode=require`). Paste it in the dashboard at Apply time — sync:false
+      # keeps the secret out of the repo. ASYNC_DATABASE_URL is derived from it in
+      # app/config.py (scheme swapped to asyncpg, sslmode stripped, TLS enabled).
+      - key: DATABASE_URL
+        sync: false
+
+      - key: REDIS_URL
+        fromService:
+          name: gym-equipment-cache
+          type: keyvalue
+          property: connectionString
+
+      # Auto-generated, secure, never shown in the repo.
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "15"
+      - key: REFRESH_TOKEN_EXPIRE_DAYS
+        value: "7"
+
+      # The seeded admin login. Set a strong password when prompted at Apply time.
+      - key: FIRST_ADMIN_EMAIL
+        value: admin@example.com
+      - key: FIRST_ADMIN_PASSWORD
+        sync: false

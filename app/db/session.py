@@ -17,11 +17,16 @@ from app.config import settings
 
 
 # --- Engine ---
+# Managed Postgres (Neon) requires TLS; asyncpg enables it via connect_args, not
+# the sslmode query param (which config.py strips off the URL).
+connect_args = {"ssl": True} if settings.db_ssl_required else {}
+
 engine = create_async_engine(
-    settings.ASYNC_DATABASE_URL, 
+    settings.ASYNC_DATABASE_URL,
     echo=settings.DEBUG,
-    pool_pre_ping=True
-)  
+    pool_pre_ping=True,
+    connect_args=connect_args,
+)
 
 
 # --- Session factory ---

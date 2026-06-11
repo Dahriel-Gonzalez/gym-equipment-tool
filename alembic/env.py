@@ -39,12 +39,20 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    url = os.getenv("ASYNC_DATABASE_URL")
-    if not url:
-        raise RuntimeError(
-            "ASYNC_DATABASE_URL is not set. Copy .env.example to .env and fill it in."
-        )
-    return url
+    # Use the app's settings so ASYNC_DATABASE_URL is derived from DATABASE_URL
+    # when only the latter is set (e.g. on Render). Falls back to the raw env var
+    # if config can't be imported for some reason.
+    try:
+        from app.config import settings
+
+        return settings.ASYNC_DATABASE_URL
+    except Exception:
+        url = os.getenv("ASYNC_DATABASE_URL")
+        if not url:
+            raise RuntimeError(
+                "ASYNC_DATABASE_URL is not set. Copy .env.example to .env and fill it in."
+            )
+        return url
 
 
 def run_migrations_offline() -> None:
@@ -74,7 +82,19 @@ def do_run_migrations(connection: Connection) -> None:
 
 async def run_async_migrations() -> None:
     """Create an async engine and run migrations via run_sync."""
-    connectable = create_async_engine(get_url(), poolclass=pool.NullPool)
+    # Mirror the app engine: managed Postgres (Neon) needs TLS via connect_args,
+    # since asyncpg can't read the sslmode query param config.py strips off.
+    connect_args = {}
+    try:
+        from app.config import settings
+
+        if settings.db_ssl_required:
+            connect_args["ssl"] = True
+    except Exception:
+        pass
+    connectable = create_async_engine(
+        get_url(), poolclass=pool.NullPool, connect_args=connect_args
+    )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
